@@ -39,9 +39,8 @@ if not mistral_api_key:
 
 agent_id = "ag_019b704bddcc72079c3a26f9cb4891fa"
 
-factcheckerNprofile = (
-    "nprofile1qyxhwumn8ghj7mn0wvhxcmmvqywhwumn8ghj7mn0wd68yttsw43zuam9d3kx7unyv4ezumn9wsqzqsf4rcckdeakmhwufs9dfrnfx50vx3gzwudzzmd7pzafc6puflsu6lvzjz"
-)
+factchecker_npub = "npub1gy63uvtxu7mdmhwyczk53e5n28krg5p8wx3pdklq3w5udq7ylcwqvrwygj"
+factchecker_pk = "41351e3166e7b6ddddc4c0ad48e69351ec34502771a216dbe08ba9c683c4fe1c"
 
 factchecker = FactChecker(
     api_key=mistral_api_key,
@@ -126,9 +125,9 @@ def check_message(message_json, url):
 
     content = (event.content or "").strip().lower()
 
-    if factcheckerNprofile not in content and "@factchecker" not in content:
+    if not (("p" in event.get_tag_dict() and event.get_tag_dict()["p"][0][0] in [factchecker_npub, factchecker_pk]) or "factchecker.debug" in content):
         return
-
+    print(event)
     log.info(f"Factcheck request from {event.pubkey}")
 
     # Rate limit (≈1 msg/sec)
