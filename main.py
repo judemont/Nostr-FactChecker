@@ -3,6 +3,8 @@ import datetime
 import uuid
 import sys
 import os
+from typing import Dict, List, Optional
+
 from cachetools import TTLCache
 from tornado import gen
 from tornado.queues import Queue
@@ -16,38 +18,46 @@ from pynostr.relay_manager import RelayManager
 from factchecker import FactChecker
 
 
-# -------------------- LOGGING --------------------
+# ============================================================
+# LOGGING CONFIGURATION
+# ============================================================
 
 logging.basicConfig(
     level=logging.DEBUG,
     stream=sys.stdout,
     format="[%(asctime)s - %(levelname)s] %(message)s"
 )
-log = logging.getLogger("FactCheckerNostrBot")
+log = logging.getLogger("NostrFactCheckerBot")
 log.setLevel(logging.INFO)
 
 
-# -------------------- CONFIG --------------------
+# ============================================================
+# ENVIRONMENT & CONSTANTS
+# ============================================================
 
-small_cache = TTLCache(maxsize=200, ttl=15)
+FACTCHECKER_PRIVATE_KEY = os.environ.get("FACTCHECKER_PRIVATE_KEY")
+MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY")
 
-hex_pk = os.environ["FACTCHECKER_PRIVATE_KEY"]
-mistral_api_key = os.environ["MISTRAL_API_KEY"]
+if FACTCHECKER_PRIVATE_KEY is None:
+    raise ValueError("FACTCHECKER_PRIVATE_KEY environment variable not set")
 
-if not mistral_api_key:
-    raise ValueError("MISTRAL_API_KEY environment variable not set.")
+if MISTRAL_API_KEY is None:
+    raise ValueError("MISTRAL_API_KEY environment variable not set")
 
-agent_id = "ag_019b704bddcc72079c3a26f9cb4891fa"
+FACTCHECKER_AGENT_ID = "ag_019b704bddcc72079c3a26f9cb4891fa"
 
-factchecker_npub = "npub1gy63uvtxu7mdmhwyczk53e5n28krg5p8wx3pdklq3w5udq7ylcwqvrwygj"
-factchecker_pk = "41351e3166e7b6ddddc4c0ad48e69351ec34502771a216dbe08ba9c683c4fe1c"
+FACTCHECKER_NPUB = "npub1gy63uvtxu7mdmhwyczk53e5n28krg5p8wx3pdklq3w5udq7ylcwqvrwygj"
+FACTCHECKER_PUBKEY = "41351e3166e7b6ddddc4c0ad48e69351ec34502771a216dbe08ba9c683c4fe1c"
 
-factchecker = FactChecker(
-    api_key=mistral_api_key,
-    agent_id=agent_id
-)
+RATE_LIMIT_DELAY = datetime.timedelta(milliseconds=1000)
+FETCH_EVENT_TIMEOUT = 2.0
 
-relays = [
+
+# ============================================================
+# RELAYS
+# ============================================================
+
+RELAYS = [
     "wss://nos.lol",
     "wss://relay.nostr.bg",
     "wss://nostr.einundzwanzig.space",
@@ -59,168 +69,197 @@ relays = [
     "wss://relay.primal.net",
 ]
 
-last_sent_message_time = datetime.datetime.now()
 
-# Pending fetch-by-id requests
-pending_event_requests: dict[str, Queue] = {}
+# ============================================================
+# GLOBAL STATE
+# ============================================================
+
+event_dedup_cache = TTLCache(maxsize=200, ttl=15)
+pending_event_requests: Dict[str, Queue] = {}
+
+last_sent_message_time = datetime.datetime.min
+
+factchecker = FactChecker(
+    api_key=MISTRAL_API_KEY,
+    agent_id=FACTCHECKER_AGENT_ID
+)
+
+relay_manager: RelayManager
 
 
-# -------------------- HELPERS --------------------
+# ============================================================
+# HELPERS
+# ============================================================
 
-def get_images_from_content(content: str) -> list[str]:
-    images = []
-    for word in content.split():
-        if word.startswith(("http://", "https://")):
-            if word.lower().endswith((
-                ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"
-            )):
-                images.append(word)
-    return images
+def extract_image_urls(content: str) -> List[str]:
+    """Extract image URLs from text content."""
+    if not content:
+        return []
+
+    return [
+        word for word in content.split()
+        if word.startswith(("http://", "https://"))
+        and word.lower().endswith((
+            ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"
+        ))
+    ]
 
 
 @gen.coroutine
-def fetch_event_by_id(event_id: str, timeout=2.0):
+def fetch_event_by_id(event_id: str, timeout: float = FETCH_EVENT_TIMEOUT):
     """
-    Fetch a single event by ID using the already-connected RelayManager.
+    Fetch a single Nostr event by ID using existing relay connections.
     """
-    q = Queue()
-    pending_event_requests[event_id] = q
+    queue = Queue()
+    pending_event_requests[event_id] = queue
 
-    sub_id = uuid.uuid4().hex
+    subscription_id = uuid.uuid4().hex
     filters = FiltersList([Filters(ids=[event_id])])
-    relay_manager.add_subscription_on_all_relays(sub_id, filters)
+
+    relay_manager.add_subscription_on_all_relays(subscription_id, filters)
 
     try:
-        ev = yield gen.with_timeout(
+        event = yield gen.with_timeout(
             datetime.timedelta(seconds=timeout),
-            q.get()
+            queue.get()
         )
-        return ev
+        return event
     except TimeoutError:
+        log.warning(f"Timeout while fetching event {event_id}")
         return None
     finally:
         pending_event_requests.pop(event_id, None)
 
 
-# -------------------- MESSAGE CALLBACK --------------------
+def should_handle_event(event: Event) -> bool:
+    """Determine whether this event is a fact-check request."""
+    content = (event.content or "").lower()
+    tags = event.get_tag_dict()
+
+    mentioned_explicitly = "@factchecker" in content
+    tagged_directly = (
+        "p" in tags and
+        tags["p"][0][0] in {FACTCHECKER_NPUB, FACTCHECKER_PUBKEY} and
+        "nostr:" in content
+    )
+
+    return mentioned_explicitly or tagged_directly
+
+
+# ============================================================
+# CORE MESSAGE HANDLER
+# ============================================================
 
 @gen.coroutine
-def check_message(message_json, url):
+def on_message(message_json, relay_url):
     global last_sent_message_time
 
     if message_json[0] != RelayMessageType.EVENT:
         return
 
-    event: Event = Event.from_dict(message_json[2])
+    event = Event.from_dict(message_json[2])
 
-    # Resolve fetch-by-id requests FIRST
+    # Resolve pending fetch-by-id requests
     if event.id in pending_event_requests:
         pending_event_requests[event.id].put(event)
         return
 
-    # Dedup
-    if event.id in small_cache:
+    # Deduplication
+    if event.id in event_dedup_cache:
         return
-    small_cache[event.id] = 1
+    event_dedup_cache[event.id] = True
 
-    content = (event.content or "").strip().lower()
-
-    if not (("p" in event.get_tag_dict() and event.get_tag_dict()["p"][0][0] in [factchecker_npub, factchecker_pk] and "nostr:" in content) or "@factchecker" in content):
+    if not should_handle_event(event):
         return
-    print(event)
-    log.info(f"Factcheck request from {event.pubkey}")
 
-    # Rate limit (≈1 msg/sec)
-    while datetime.datetime.now() - last_sent_message_time < datetime.timedelta(milliseconds=1005):
+    log.info(f"Fact-check request from {event.pubkey}")
+
+    # Rate limiting
+    while datetime.datetime.now() - last_sent_message_time < RATE_LIMIT_DELAY:
         yield gen.sleep(0.1)
+
     last_sent_message_time = datetime.datetime.now()
 
-    # -------------------- REPLY LOGIC --------------------
-
-    reply_content = None
-    new_event = None
-
+    reply_event: Optional[Event] = None
     tags = event.get_tag_dict()
 
-    if "e" in tags:
-        # Replying to another event
-        claim_event_id = tags["e"][0][0]
-        claim_event = yield fetch_event_by_id(claim_event_id)
+    try:
+        if "e" in tags:
+            # Reply to referenced event
+            target_event_id = tags["e"][0][0]
+            target_event = yield fetch_event_by_id(target_event_id)
 
-        if not claim_event:
-            log.warning(f"Could not fetch referenced event {claim_event_id}")
-            return
+            if not target_event:
+                return
 
-        claim_content = claim_event.content or ""
-        log.info(f"Checking claim: {claim_content}")
-
-        try:
-            fact_check = factchecker.check_fact(
-                claim_content,
-                images_URLs=get_images_from_content(claim_content)
+            claim_text = target_event.content or ""
+            factcheck_result = factchecker.check_fact(
+                claim_text,
+                images_URLs=extract_image_urls(claim_text)
             )
-        except Exception as e:
-            log.error(f"Fact-checking failed: {e}")
-            return
 
-        reply_content = fact_check
-        new_event = Event(reply_content)
-        new_event.tags.append(["e", claim_event_id, "", "reply"])
-        if event.pubkey:
-            new_event.add_pubkey_ref(event.pubkey)
+            reply_event = Event(factcheck_result)
+            reply_event.tags.append(["e", target_event_id, "", "reply"])
+            reply_event.add_pubkey_ref(str(event.pubkey))
 
-    else:
-        # Direct mention
-        
-        try:
-            fact_check = factchecker.check_fact(
-                event.content or "",
-                images_URLs=get_images_from_content(event.content or "")
+        else:
+            # Direct mention
+            content = event.content or ""
+            factcheck_result = factchecker.check_fact(
+                content,
+                images_URLs=extract_image_urls(content)
             )
-        except Exception as e:
-            log.error(f"Fact-checking failed: {e}")
-            return
 
-        reply_content = fact_check
-        new_event = Event(reply_content)
-        if event.id is not None:
-            new_event.tags.append(["e", event.id, "", "reply"])
+            reply_event = Event(factcheck_result)
+            reply_event.tags.append(["e", str(event.id), "", "reply"])
 
-    # -------------------- SEND --------------------
+    except Exception as exc:
+        log.error(f"Fact-checking failed: {exc}")
+        return
 
-    new_event.sign(hex_pk)
-    relay_manager.publish_event(new_event)
+    # Send reply
+    reply_event.sign(str(FACTCHECKER_PRIVATE_KEY))
+    relay_manager.publish_event(reply_event)
 
-    log.info(f"Sent factcheck reply")
+    log.info("Fact-check reply sent")
 
 
-# -------------------- STARTUP --------------------
+# ============================================================
+# STARTUP
+# ============================================================
 
-log.info("Connecting to relays...")
+def start():
+    global relay_manager
 
-relay_list = RelayList()
-relay_list.append_url_list(relays)
-relay_list.update_relay_information(timeout=1)
-relay_list.drop_empty_metadata()
+    log.info("Connecting to relays...")
 
-log.info(f"Using {len(relay_list.data)} relays")
+    relay_list = RelayList()
+    relay_list.append_url_list(RELAYS)
+    relay_list.update_relay_information(timeout=1)
+    relay_list.drop_empty_metadata()
 
-relay_manager = RelayManager(error_threshold=3, timeout=0)
-relay_manager.add_relay_list(
-    relay_list,
-    close_on_eose=False,
-    message_callback=check_message,
-    message_callback_url=True,
-)
+    log.info(f"Connected to {len(relay_list.data)} relays")
 
-filters = FiltersList([
-    Filters(
-        since=int(datetime.datetime.now().timestamp()),
-        kinds=[EventKind.TEXT_NOTE],
+    relay_manager = RelayManager(error_threshold=3, timeout=0)
+    relay_manager.add_relay_list(
+        relay_list,
+        close_on_eose=False,
+        message_callback=on_message,
+        message_callback_url=True,
     )
-])
 
-subscription_id = uuid.uuid1().hex
-relay_manager.add_subscription_on_all_relays(subscription_id, filters)
+    filters = FiltersList([
+        Filters(
+            since=int(datetime.datetime.now().timestamp()),
+            kinds=[EventKind.TEXT_NOTE],
+        )
+    ])
 
-relay_manager.run_sync()
+    subscription_id = uuid.uuid4().hex
+    relay_manager.add_subscription_on_all_relays(subscription_id, filters)
+
+    relay_manager.run_sync()
+
+
+if __name__ == "__main__":
+    start()
