@@ -134,15 +134,20 @@ def fetch_event_by_id(event_id: str, timeout: float = FETCH_EVENT_TIMEOUT):
 def should_handle_event(event: Event) -> bool:
     """Determine whether this event is a fact-check request."""
     content = (event.content or "").lower()
-    tags = event.get_tag_dict()
-
+    ptags = event.get_tag_list("p")
+    print(ptags)
     mentioned_explicitly = "@factchecker" in content
-    # Mention detection should be improved 
-    tagged_directly = (
-        "p" in tags and
-        tags["p"][0][0] in {FACTCHECKER_NPUB, FACTCHECKER_PUBKEY} and
-        "nostr:" in content
+    
+    tagged_directly = any(
+        ptag[0] in {FACTCHECKER_NPUB, FACTCHECKER_PUBKEY} and ptag[2] == "mention"
+        for ptag in ptags
     )
+    
+    # Mention detection should be improved 
+    #tagged_directly = False # (
+    #     tags["p"][0][0] in {FACTCHECKER_NPUB, FACTCHECKER_PUBKEY} and
+    #     "nostr:" in content
+    # )
 
     return mentioned_explicitly or tagged_directly
 
@@ -182,14 +187,18 @@ def on_message(message_json, relay_url):
     last_sent_message_time = datetime.datetime.now()
 
     reply_event: Optional[Event] = None
-    tags = event.get_tag_dict()
+    etags = event.get_tag_list("e")
+    
+    reply_to_ids = [etag[0] for etag in etags if len(etag) >= 4 and etag[3] == "reply"]
+    is_reply = len(reply_to_ids) > 0
+    reply_to_id = reply_to_ids[0] if is_reply else None
 
     try:
-        if "e" in tags:
+        if is_reply:
             # Reply to referenced event
-            target_event_id = tags["e"][0][0]
+            target_event_id = reply_to_id
             target_event = yield fetch_event_by_id(target_event_id)
-
+            print(target_event)
             if not target_event:
                 return
 
@@ -200,7 +209,7 @@ def on_message(message_json, relay_url):
             )
 
             reply_event = Event(factcheck_result)
-            reply_event.tags.append(["e", target_event_id, "", "reply"])
+            reply_event.tags.append(["e", str(target_event_id), "", "reply"])
             reply_event.add_pubkey_ref(str(event.pubkey))
 
         else:
