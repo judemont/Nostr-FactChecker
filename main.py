@@ -154,10 +154,14 @@ def check_message(message_json, url):
         claim_content = claim_event.content or ""
         log.info(f"Checking claim: {claim_content}")
 
-        fact_check = factchecker.check_fact(
-            claim_content,
-            images_URLs=get_images_from_content(claim_content)
-        )
+        try:
+            fact_check = factchecker.check_fact(
+                claim_content,
+                images_URLs=get_images_from_content(claim_content)
+            )
+        except Exception as e:
+            log.error(f"Fact-checking failed: {e}")
+            return
 
         reply_content = fact_check
         new_event = Event(reply_content)
@@ -167,10 +171,15 @@ def check_message(message_json, url):
 
     else:
         # Direct mention
-        fact_check = factchecker.check_fact(
-            event.content or "",
-            images_URLs=get_images_from_content(event.content or "")
-        )
+        
+        try:
+            fact_check = factchecker.check_fact(
+                event.content or "",
+                images_URLs=get_images_from_content(event.content or "")
+            )
+        except Exception as e:
+            log.error(f"Fact-checking failed: {e}")
+            return
 
         reply_content = fact_check
         new_event = Event(reply_content)

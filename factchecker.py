@@ -44,4 +44,7 @@ class FactChecker:
         except Exception as e:
             raise RuntimeError("Fact-checking service request failed") from e
         
+        if res.choices[0].message.content is None:
+            raise RuntimeError("Fact-checking service returned no content")
+        
         return f"{res.choices[0].message.content}\n\n\n\n{self.end_message}"
