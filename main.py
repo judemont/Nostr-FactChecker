@@ -137,6 +137,7 @@ def should_handle_event(event: Event) -> bool:
     tags = event.get_tag_dict()
 
     mentioned_explicitly = "@factchecker" in content
+    # Mention detection should be improved 
     tagged_directly = (
         "p" in tags and
         tags["p"][0][0] in {FACTCHECKER_NPUB, FACTCHECKER_PUBKEY} and

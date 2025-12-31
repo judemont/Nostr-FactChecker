@@ -26,7 +26,7 @@ class FactChecker:
             UserMessageTypedDict(
                 role="user",
                 content=[
-                    TextChunkTypedDict( type="text", text=f"Please verify the following statement: '{sanitized_statement}'")
+                    TextChunkTypedDict( type="text", text=f"'{sanitized_statement}'")
                 ]
             )
         ]
