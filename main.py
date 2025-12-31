@@ -190,7 +190,7 @@ def on_message(message_json, relay_url):
     etags = event.get_tag_list("e")
    
     reply_to_ids = [etag[0] for etag in etags if len(etag) >= 3 and (etag[2] == "reply") ]
-    if len(reply_to_ids) > 0:
+    if len(reply_to_ids) == 0:
         reply_to_ids = [etag[0] for etag in etags if len(etag) >= 3 and (etag[2] == "root") ]
 
     is_reply = len(reply_to_ids) > 0
