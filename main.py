@@ -135,7 +135,7 @@ def should_handle_event(event: Event) -> bool:
     """Determine whether this event is a fact-check request."""
     content = (event.content or "").lower()
     ptags = event.get_tag_list("p")
-    print(ptags)
+   # print(ptags)
     mentioned_explicitly = "@factchecker" in content
     
     tagged_directly = any(
@@ -188,11 +188,11 @@ def on_message(message_json, relay_url):
 
     reply_event: Optional[Event] = None
     etags = event.get_tag_list("e")
-    
-    reply_to_ids = [etag[0] for etag in etags if len(etag) >= 4 and etag[3] == "reply"]
+   
+    reply_to_ids = [etag[0] for etag in etags if len(etag) >= 3 and etag[2] == "reply"]
     is_reply = len(reply_to_ids) > 0
     reply_to_id = reply_to_ids[0] if is_reply else None
-
+   
     try:
         if is_reply:
             # Reply to referenced event
