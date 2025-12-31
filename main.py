@@ -125,7 +125,7 @@ def check_message(message_json, url):
 
     content = (event.content or "").strip().lower()
 
-    if not (("p" in event.get_tag_dict() and event.get_tag_dict()["p"][0][0] in [factchecker_npub, factchecker_pk]) or "factchecker.debug" in content):
+    if not (("p" in event.get_tag_dict() and event.get_tag_dict()["p"][0][0] in [factchecker_npub, factchecker_pk] and "nostr:" in content) or "@factchecker" in content):
         return
     print(event)
     log.info(f"Factcheck request from {event.pubkey}")
