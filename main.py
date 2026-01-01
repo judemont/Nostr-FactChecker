@@ -215,16 +215,16 @@ def on_message(message_json, relay_url):
             reply_event.tags.append(["e", str(target_event_id), "", "reply"])
             reply_event.add_pubkey_ref(str(event.pubkey))
 
-        else:
-            # Direct mention
-            content = event.content or ""
-            factcheck_result = factchecker.check_fact(
-                content,
-                images_URLs=extract_image_urls(content)
-            )
+        # else:
+        #     # Direct mention
+        #     content = event.content or ""
+        #     factcheck_result = factchecker.check_fact(
+        #         content,
+        #         images_URLs=extract_image_urls(content)
+        #     )
 
-            reply_event = Event(factcheck_result)
-            reply_event.tags.append(["e", str(event.id), "", "reply"])
+        #     reply_event = Event(factcheck_result)
+        #     reply_event.tags.append(["e", str(event.id), "", "reply"])
 
     except Exception as exc:
         log.error(f"Fact-checking failed: {exc}")
