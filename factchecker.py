@@ -1,50 +1,126 @@
-from mistralai import AgentsCompletionRequestMessagesTypedDict, ContentChunk, ImageURLChunk, ImageURLChunkTypedDict, Mistral, TextChunk, TextChunkTypedDict, UserMessageTypedDict
+from typing import Dict, List, Optional, cast
+from mistralai import (
+    AgentsCompletionRequestMessages,
+    AgentsCompletionRequestMessagesTypedDict,
+    AssistantMessage,
+    AssistantMessageTypedDict,
+    ContentChunk,
+    ImageURLChunk,
+    ImageURLChunkTypedDict,
+    Mistral,
+    TextChunk,
+    TextChunkTypedDict,
+    ToolMessageTypedDict,
+    UserMessageTypedDict,
+    ToolCall,
+)
+from googlesearch import search
+import json
 
 class FactChecker:
     def __init__(self, api_key: str, agent_id: str):
-        self.client: Mistral = Mistral(api_key=api_key)
+        self.client = Mistral(api_key=api_key)
         self.agent_id = agent_id
-        self.end_message = "Warning: This tool is still in beta and may produce inaccurate results. Please always verify the information from reliable sources."
-        
-    def check_fact(self, statement: str, images_URLs: list[str] | None = None) -> str:
+        self.beta_warning_message = (
+            "Warning: This tool is still in beta and may produce inaccurate results. "
+            "Always verify information from reliable sources."
+        )
+
+
+
+    def perform_web_search(self, query: str, num_results: int = 3) -> str:
+        """Perform a web search and return results as a JSON string."""
+        try:
+            search_results = search(query, num_results=num_results, lang="en")
+            results = [{"title": result, "url": result} for result in search_results]
+            return json.dumps(results)
+        except Exception as error:
+            return json.dumps({"error": f"Web search failed: {error}"})
+
+    def handle_tool_calls(
+        self, tool_calls: List[ToolCall], messages: list[AgentsCompletionRequestMessagesTypedDict]
+    ) -> list[AgentsCompletionRequestMessagesTypedDict]:
+        """Process tool calls and return formatted tool results."""
+        for tool_call in tool_calls:
+            if tool_call.function.name == "web_search":
+                query = json.loads(str(tool_call.function.arguments))["query"]
+                search_results = self.perform_web_search(query)
+                messages.append(
+                    ToolMessageTypedDict(
+                        role="tool",
+                        content=search_results,
+                        tool_call_id=tool_call.id,
+                        name=tool_call.function.name,
+                    )
+                )
+        return messages
+
+
+    def formate_result(self, result: str) -> str:
+        """Format the fact-checking result."""
+        result = result.strip().replace("**", "").replace("__", "").replace("[", "").replace("]", "") # Remove markdown
+        return f"Fact-Check Results:\n{result}\n\n{self.beta_warning_message}"
+
+    def check_fact(
+        self, statement: str, image_urls: Optional[List[str]] = None
+    ) -> str:
+        """Main method to check a factual statement."""
         sanitized_statement = statement.strip().replace('"', "'")
-                    
-        images_messages = []
-        if images_URLs is not None:
-            images_messages = [
+
+        # Initialize messages with system prompt and user query
+        messages: list[AgentsCompletionRequestMessagesTypedDict] = [
+            UserMessageTypedDict(
+                role="user",
+                content=[TextChunkTypedDict(type="text", text=f"'{sanitized_statement}'")],
+            ),
+        ]
+
+        # Add image URLs if provided
+        if image_urls:
+            messages.append(
                 UserMessageTypedDict(
                     role="user",
                     content=[
                             ImageURLChunkTypedDict(image_url=url, type="image_url") 
-                        for url in images_URLs
+                        for url in image_urls
                         ]
                     )
-            ]
-         
-
-        text_messages = [
-            UserMessageTypedDict(
-                role="user",
-                content=[
-                    TextChunkTypedDict( type="text", text=f"'{sanitized_statement}'")
-                ]
             )
-        ]
-        
+
         try:
-            res = self.client.agents.complete(
-                messages=[
-                    *images_messages,
-                    *text_messages
-                ],
+            # Initial API call
+            response = self.client.agents.complete(
+                messages=list(messages),
                 agent_id=self.agent_id,
                 stream=False,
             )
-            
-        except Exception as e:
-            raise RuntimeError("Fact-checking service request failed") from e
-        
-        if res.choices[0].message.content is None or str(res.choices[0].message.content).strip() == "":
-            raise RuntimeError("Fact-checking service returned no content")
-        
-        return f"{res.choices[0].message.content}\n\n\n\n{self.end_message}"
+
+            # Add the assistant's response to messages
+            messages.append(cast(AssistantMessageTypedDict, response.choices[0].message.model_dump()))
+
+            # Handle tool calls if present
+            while response.choices[0].message.tool_calls:
+                messages = self.handle_tool_calls(
+                    response.choices[0].message.tool_calls, messages
+                )
+
+                # Call the API again with tool results
+                response = self.client.agents.complete(
+                    messages=messages,
+                    agent_id=self.agent_id,
+                    stream=False,
+                )
+
+                # Add the new response to messages
+                messages.append(response.choices[0].message.model_dump())
+
+            # Return the final answer
+            if not response.choices[0].message.content:
+                raise RuntimeError("No content returned after tool calls.")
+
+            return f"{response.choices[0].message.content}\n\n{self.beta_warning_message}"
+
+
+
+        except Exception as error:
+            raise RuntimeError(f"Fact-checking failed: {error}") from error
