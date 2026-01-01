@@ -215,6 +215,11 @@ def on_message(message_json, relay_url):
             reply_event.tags.append(["e", str(target_event_id), "", "reply"])
             reply_event.add_pubkey_ref(str(event.pubkey))
 
+
+            # Send reply
+            reply_event.sign(str(FACTCHECKER_PRIVATE_KEY))
+            relay_manager.publish_event(reply_event)
+            
         # else:
         #     # Direct mention
         #     content = event.content or ""
@@ -230,9 +235,7 @@ def on_message(message_json, relay_url):
         log.error(f"Fact-checking failed: {exc}")
         return
 
-    # Send reply
-    reply_event.sign(str(FACTCHECKER_PRIVATE_KEY))
-    relay_manager.publish_event(reply_event)
+
 
     log.info("Fact-check reply sent")
 
