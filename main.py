@@ -269,6 +269,7 @@ def start():
         Filters(
             since=int(datetime.datetime.now().timestamp()),
             kinds=[EventKind.TEXT_NOTE],
+            pubkey_refs=[FACTCHECKER_PUBKEY,]
         )
     ])
 
