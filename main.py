@@ -226,7 +226,7 @@ def on_message(message_json, relay_url):
                 image_urls=image_urls
             )
             tagger_npub = pubkey_to_npub(target_event.pubkey or "")
-            reply_event = Event(f"{factcheck_result}\n\n\nnostr:{tagger_npub}")
+            reply_event = Event(f"{factcheck_result}") #\n\n\nnostr:{tagger_npub}")
             reply_event.tags.append(["e", str(target_event_id), "", "reply"])
             reply_event.tags.append(["p", str(event.pubkey), "mention"])
             reply_event.tags.append(["p", str(target_event.pubkey), "mention"])
