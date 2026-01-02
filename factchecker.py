@@ -46,7 +46,7 @@ class FactChecker:
     ) -> list[AgentsCompletionRequestMessagesTypedDict]:
         """Process tool calls and return formatted tool results."""
         for tool_call in tool_calls:
-            if tool_call.function.name == "web_search":
+            if tool_call.function.name in ["web_search", "search_web"] :
                 query = json.loads(str(tool_call.function.arguments))["query"]
                 search_results = self.perform_web_search(query)
                 print("Search results:", search_results)
