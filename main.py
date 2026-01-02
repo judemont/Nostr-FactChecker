@@ -213,7 +213,8 @@ def on_message(message_json, relay_url):
 
             reply_event = Event(factcheck_result)
             reply_event.tags.append(["e", str(target_event_id), "", "reply"])
-            reply_event.add_pubkey_ref(str(event.pubkey))
+            reply_event.tags.append(["p", str(event.pubkey), "mention"])
+            reply_event.tags.append(["p", str(target_event.pubkey), "mention"])
 
 
             # Send reply
