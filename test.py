@@ -26,6 +26,8 @@ class TestFactChecker(unittest.TestCase):
             for result in results:
                 self.assertIn("title", result)
                 self.assertIn("url", result)
+                self.assertIn("body", result)
+
         except Exception as e:
             self.fail(f"FactChecker.perform_web_search raised an exception: {e}")
     

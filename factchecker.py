@@ -14,7 +14,7 @@ from mistralai import (
     UserMessageTypedDict,
     ToolCall,
 )
-from googlesearch import search
+from ddgs import DDGS
 import json
 
 class FactChecker:
@@ -34,8 +34,9 @@ class FactChecker:
 
         try:
             results = []
-            for url in search(query, num=num_results, lang="en"):
-                results.append({"url": url, "title": "Title not available"})
+            search_results = DDGS().text(query, max_results=num_results)
+            for result in search_results:
+                results.append({"url": result["href"], "title": result["title"], "body": result["body"]})
             return json.dumps(results)
         except Exception as error:
             return json.dumps({"error": f"Web search failed: {error}"})
@@ -109,7 +110,6 @@ class FactChecker:
                     response.choices[0].message.tool_calls, messages
                 )
                 print(messages)
-                exit()
                 # Call the API again with tool results
                 response = self.client.agents.complete(
                     messages=messages,
