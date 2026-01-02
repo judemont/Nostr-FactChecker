@@ -28,11 +28,14 @@ class FactChecker:
 
 
 
-    def perform_web_search(self, query: str, num_results: int = 3) -> str:
-        """Perform a web search and return results as a JSON string."""
+    def perform_web_search(self, query: str, num_results: int = 7) -> str:
+        if num_results <= 0:
+            return json.dumps({"error": "num_results must be a positive integer"})
+
         try:
-            search_results = search(query, num_results=num_results, lang="en")
-            results = [{"title": result, "url": result} for result in search_results]
+            results = []
+            for url in search(query, num=num_results, lang="en"):
+                results.append({"url": url, "title": "Title not available"})
             return json.dumps(results)
         except Exception as error:
             return json.dumps({"error": f"Web search failed: {error}"})
@@ -45,6 +48,7 @@ class FactChecker:
             if tool_call.function.name == "web_search":
                 query = json.loads(str(tool_call.function.arguments))["query"]
                 search_results = self.perform_web_search(query)
+                print("Search results:", search_results)
                 messages.append(
                     ToolMessageTypedDict(
                         role="tool",
@@ -53,6 +57,7 @@ class FactChecker:
                         name=tool_call.function.name,
                     )
                 )
+                
         return messages
 
 
@@ -103,7 +108,8 @@ class FactChecker:
                 messages = self.handle_tool_calls(
                     response.choices[0].message.tool_calls, messages
                 )
-
+                print(messages)
+                exit()
                 # Call the API again with tool results
                 response = self.client.agents.complete(
                     messages=messages,
