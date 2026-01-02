@@ -58,7 +58,15 @@ class FactChecker:
                         name=tool_call.function.name,
                     )
                 )
-                
+            else:
+                messages.append(
+                    ToolMessageTypedDict(
+                        role="tool",
+                        content=f"Error: Unknown tool '{tool_call.function.name}'",
+                        tool_call_id=tool_call.id,
+                        name=tool_call.function.name,
+                    )
+                )
         return messages
 
 
