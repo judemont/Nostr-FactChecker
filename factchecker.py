@@ -8,6 +8,7 @@ from mistralai import (
     ImageURLChunk,
     ImageURLChunkTypedDict,
     Mistral,
+    SystemMessageTypedDict,
     TextChunk,
     TextChunkTypedDict,
     ToolMessageTypedDict,
@@ -16,6 +17,7 @@ from mistralai import (
 )
 from ddgs import DDGS
 import json
+from datetime import datetime
 
 class FactChecker:
     def __init__(self, api_key: str, agent_id: str):
@@ -83,13 +85,30 @@ class FactChecker:
         sanitized_statement = statement.strip().replace('"', "'")
 
         # Initialize messages with system prompt and user query
-        messages: list[AgentsCompletionRequestMessagesTypedDict] = [
-            UserMessageTypedDict(
+        messages: list[AgentsCompletionRequestMessagesTypedDict] = []
+        
+        today = datetime.today().strftime('%Y-%m-%d')
+        messages.append(
+            SystemMessageTypedDict(
+                role="system",
+                content=[
+                    TextChunkTypedDict(
+                        type="text",
+                        text=(
+                            f"Today's date is {today}."
+                        ),
+                    )
+                ],
+            )
+        )
+        messages.append(
+              UserMessageTypedDict(
                 role="user",
                 content=[TextChunkTypedDict(type="text", text=f"'{sanitized_statement}'")],
             ),
-        ]
-
+        )
+        
+        
         # Add image URLs if provided
         if image_urls:
             messages.append(
