@@ -51,7 +51,7 @@ class FactChecker:
             if tool_call.function.name in ["web_search", "search_web"] :
                 query = json.loads(str(tool_call.function.arguments))["query"]
                 search_results = self.perform_web_search(query)
-                print("Search results:", search_results)
+             #   print("Search results:", search_results)
                 messages.append(
                     ToolMessageTypedDict(
                         role="tool",
@@ -137,7 +137,7 @@ class FactChecker:
                 messages = self.handle_tool_calls(
                     response.choices[0].message.tool_calls, messages
                 )
-                print(messages)
+             #   print(messages)
                 # Call the API again with tool results
                 response = self.client.agents.complete(
                     messages=messages,

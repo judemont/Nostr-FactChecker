@@ -49,7 +49,7 @@ FACTCHECKER_AGENT_ID = "ag_019b704bddcc72079c3a26f9cb4891fa"
 FACTCHECKER_NPUB = "npub1gy63uvtxu7mdmhwyczk53e5n28krg5p8wx3pdklq3w5udq7ylcwqvrwygj"
 FACTCHECKER_PUBKEY = "41351e3166e7b6ddddc4c0ad48e69351ec34502771a216dbe08ba9c683c4fe1c"
 
-RATE_LIMIT_DELAY = datetime.timedelta(milliseconds=1000)
+RATE_LIMIT_DELAY = datetime.timedelta(milliseconds=5000)
 FETCH_EVENT_TIMEOUT = 2.0
 
 
@@ -74,7 +74,7 @@ RELAYS = [
 # GLOBAL STATE
 # ============================================================
 
-event_dedup_cache = TTLCache(maxsize=200, ttl=15)
+event_dedup_cache = TTLCache(maxsize=500, ttl=60)
 pending_event_requests: Dict[str, Queue] = {}
 
 last_sent_message_time = datetime.datetime.min
@@ -214,7 +214,7 @@ def on_message(message_json, relay_url):
                 image_urls=image_urls
             )
 
-            reply_event = Event(factcheck_result)
+            reply_event = Event(f"{factcheck_result}\n\n\nnostr:{event.pubkey}")
             reply_event.tags.append(["e", str(target_event_id), "", "reply"])
             reply_event.tags.append(["p", str(event.pubkey), "mention"])
             reply_event.tags.append(["p", str(target_event.pubkey), "mention"])
