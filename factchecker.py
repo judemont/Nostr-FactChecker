@@ -67,6 +67,7 @@ class FactChecker:
         result = result.strip().replace("**", "").replace("__", "").replace("[", "").replace("]", "") # Remove markdown
         return f"Fact-Check Results:\n{result}\n\n{self.beta_warning_message}"
 
+
     def check_fact(
         self, statement: str, image_urls: Optional[List[str]] = None
     ) -> str:
@@ -124,7 +125,7 @@ class FactChecker:
             if not response.choices[0].message.content:
                 raise RuntimeError("No content returned after tool calls.")
 
-            return f"{response.choices[0].message.content}\n\n{self.beta_warning_message}"
+            return self.formate_result(response.choices[0].message.content)
 
 
 

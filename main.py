@@ -206,9 +206,12 @@ def on_message(message_json, relay_url):
                 return
 
             claim_text = target_event.content or ""
+            image_urls = extract_image_urls(claim_text)
+            for image_url in image_urls:
+                claim_text = claim_text.replace(image_url, "")
             factcheck_result = factchecker.check_fact(
                 claim_text,
-                image_urls=extract_image_urls(claim_text)
+                image_urls=image_urls
             )
 
             reply_event = Event(factcheck_result)
