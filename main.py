@@ -76,7 +76,7 @@ RELAYS = [
 # GLOBAL STATE
 # ============================================================
 
-event_dedup_cache = TTLCache(maxsize=500, ttl=60)
+event_dedup_cache = TTLCache(maxsize=1000, ttl=3600)
 pending_event_requests: Dict[str, Queue] = {}
 
 last_sent_message_time = datetime.datetime.min
