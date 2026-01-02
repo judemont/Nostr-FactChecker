@@ -74,7 +74,7 @@ class FactChecker:
 
     def formate_result(self, result: str) -> str:
         """Format the fact-checking result."""
-        result = result.strip().replace("**", "").replace("__", "").replace("[", "").replace("]", "") # Remove markdown
+        result = result.strip().replace("**", "").replace("__", "").replace("[", "").replace("]", " ") # Remove markdown
         return f"Fact-Check Results:\n{result}\n\n{self.beta_warning_message}"
 
 
@@ -82,7 +82,7 @@ class FactChecker:
         self, statement: str, image_urls: Optional[List[str]] = None
     ) -> str:
         """Main method to check a factual statement."""
-        sanitized_statement = statement.strip().replace('"', "'")
+        sanitized_statement = statement.strip().replace('"', "'").replace("\n", " ")
 
         # Initialize messages with system prompt and user query
         messages: list[AgentsCompletionRequestMessagesTypedDict] = []
