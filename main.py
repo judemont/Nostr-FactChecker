@@ -16,14 +16,13 @@ from pynostr.relay_list import RelayList
 from pynostr.relay_manager import RelayManager
 
 from factchecker import FactChecker
-from pynostr.key import PublicKey
-from pynostr.bech32 import encode as bech32_encode
+from pynostr.key import PublicKey 
+from pynostr.bech32 import bech32_encode
 
 
 # ============================================================
 # LOGGING CONFIGURATION
 # ============================================================
-
 logging.basicConfig(
     level=logging.DEBUG,
     stream=sys.stdout,
@@ -94,14 +93,7 @@ relay_manager: RelayManager
 # ============================================================
 
 def pubkey_to_npub(pubkey: str) -> str:
-    """Convert a hex pubkey to npub format."""
-
-    pk = PublicKey.from_hex(pubkey)
-    pubkey_bytes = bytes.fromhex(pubkey)
-    npub = bech32_encode("npub", 0, pubkey_bytes)
-    if npub is None:
-        raise ValueError("Failed to encode pubkey to npub format")
-    return npub
+    return PublicKey(bytes.fromhex(pubkey)).bech32()
 
 def extract_image_urls(content: str) -> List[str]:
     """Extract image URLs from text content."""
@@ -225,8 +217,8 @@ def on_message(message_json, relay_url):
                 claim_text,
                 image_urls=image_urls
             )
-            tagger_npub = pubkey_to_npub(target_event.pubkey or "")
-            reply_event = Event(f"{factcheck_result}") #\n\n\nnostr:{tagger_npub}")
+            tagger_npub = pubkey_to_npub(event.pubkey or "")
+            reply_event = Event(f"{factcheck_result}\n\n\nnostr:{tagger_npub}")
             reply_event.tags.append(["e", str(target_event_id), "", "reply"])
             reply_event.tags.append(["p", str(event.pubkey), "mention"])
             reply_event.tags.append(["p", str(target_event.pubkey), "mention"])
