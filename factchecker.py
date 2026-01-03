@@ -61,7 +61,10 @@ class FactChecker:
         for tool_call in tool_calls:
             if tool_call.function.name in ["web_search", "search_web"] :
                 query = json.loads(str(tool_call.function.arguments))["query"]
-                search_results = self.perform_web_search(query)
+                try:
+                    search_results = self.perform_web_search(query)
+                except Exception as e:
+                    search_results = json.dumps({"error": f"Web search failed: {e}"})
              #   print("Search results:", search_results)
                 messages.append(
                     ToolMessageTypedDict(
@@ -74,8 +77,10 @@ class FactChecker:
                 
             elif tool_call.function.name == "get_webpage_content":
                 url = json.loads(str(tool_call.function.arguments))["url"]
-                webpage_content = self.get_webpage_content(url)
-                
+                try:
+                    webpage_content = self.get_webpage_content(url)
+                except Exception as e:
+                    webpage_content = json.dumps({"error": f"Failed to get webpage content: {e}"})
                 messages.append(
                     ToolMessageTypedDict(
                         role="tool",
