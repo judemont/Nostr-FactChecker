@@ -23,7 +23,7 @@ class FactChecker:
     def __init__(self, api_key: str, agent_id: str):
         self.client = Mistral(api_key=api_key)
         self.agent_id = agent_id
-        self.beta_warning_message = (
+        self.warning_message = (
             "Caution: I’m just a tool. I don’t hold absolute truth or authority. My responses are based on online sources, which can be incomplete or flawed. Always verify independently."
         )
 
@@ -74,7 +74,7 @@ class FactChecker:
     def formate_result(self, result: str) -> str:
         """Format the fact-checking result."""
         result = result.strip().replace("**", "").replace("__", "").replace("[", "").replace("]", " ") # Remove markdown
-        return f"Fact-Check Results:\n{result}\n\n{self.beta_warning_message}"
+        return f"Fact-Check Results:\n{result}\n\n{self.warning_message}"
 
 
     def check_fact(
