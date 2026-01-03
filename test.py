@@ -7,6 +7,28 @@ import sys
 
 
 class TestFactChecker(unittest.TestCase):
+    def test_get_webpage_content(self):
+        MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY")
+
+        if MISTRAL_API_KEY is None:
+            raise ValueError("MISTRAL_API_KEY environment variable not set")
+
+        FACTCHECKER_AGENT_ID = "ag_019b704bddcc72079c3a26f9cb4891fa"
+        max_length = 100
+        try:
+            factchecker = FactChecker(agent_id=FACTCHECKER_AGENT_ID, api_key=MISTRAL_API_KEY)
+            url = "https://www.nasa.gov/earth/how-do-we-know-the-earth-isnt-flat-we-asked-a-nasa-expert-episode-53/"
+            result = factchecker.get_webpage_content(url, max_length=max_length)
+            content_dict = json.loads(result)
+            self.assertIn("url", content_dict)
+            self.assertIn("content", content_dict)
+            self.assertEqual(content_dict["url"], url)
+            self.assertIsInstance(content_dict["content"], str)
+            self.assertLessEqual(len(content_dict["content"]), max_length)
+            print(content_dict)
+        except Exception as e:
+            self.fail(f"FactChecker.get_webpage_content raised an exception: {e}")
+    
     def test_web_search(self):
         MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY")
 

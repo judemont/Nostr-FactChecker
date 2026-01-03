@@ -18,6 +18,8 @@ from mistralai import (
 from ddgs import DDGS
 import json
 from datetime import datetime
+import requests
+from bs4 import BeautifulSoup
 
 class FactChecker:
     def __init__(self, api_key: str, agent_id: str):
@@ -27,6 +29,16 @@ class FactChecker:
             "Caution: I’m just a tool. I don’t hold absolute truth or authority. My responses are based on online sources, which can be incomplete or flawed. Always verify independently."
         )
 
+    def get_webpage_content(self, url: str, max_length: int = 10000) -> str:
+        """Fetch and return the text content of a webpage."""
+        try:
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+            text = ' '.join(p.get_text().replace('\n', ' ').strip() for p in soup.find_all("p"))
+            return json.dumps({"url": url, "content": text[:max_length]})
+        except requests.RequestException as error:
+            return json.dumps({"error": f"Failed to fetch webpage content: {error}"})
 
 
     def perform_web_search(self, query: str, num_results: int = 7) -> str:
@@ -59,6 +71,20 @@ class FactChecker:
                         name=tool_call.function.name,
                     )
                 )
+                
+            elif tool_call.function.name == "get_webpage_content":
+                url = json.loads(str(tool_call.function.arguments))["url"]
+                webpage_content = self.get_webpage_content(url)
+                
+                messages.append(
+                    ToolMessageTypedDict(
+                        role="tool",
+                        content=webpage_content,
+                        tool_call_id=tool_call.id,
+                        name=tool_call.function.name,
+                    )
+                )
+                print("Webpage content:", webpage_content)
             else:
                 messages.append(
                     ToolMessageTypedDict(
@@ -81,6 +107,7 @@ class FactChecker:
         self, statement: str, image_urls: Optional[List[str]] = None
     ) -> str:
         """Main method to check a factual statement."""
+        import time
         sanitized_statement = statement.strip().replace('"', "'").replace("\n", " ")
 
         # Initialize messages with system prompt and user query
@@ -107,7 +134,6 @@ class FactChecker:
             ),
         )
         
-        
         # Add image URLs if provided
         if image_urls:
             messages.append(
@@ -127,6 +153,7 @@ class FactChecker:
                 agent_id=self.agent_id,
                 stream=False,
             )
+            time.sleep(1.5)
 
             # Add the assistant's response to messages
             messages.append(cast(AssistantMessageTypedDict, response.choices[0].message.model_dump()))
@@ -136,13 +163,13 @@ class FactChecker:
                 messages = self.handle_tool_calls(
                     response.choices[0].message.tool_calls, messages
                 )
-             #   print(messages)
                 # Call the API again with tool results
                 response = self.client.agents.complete(
                     messages=messages,
                     agent_id=self.agent_id,
                     stream=False,
                 )
+                time.sleep(1.5)
 
                 # Add the new response to messages
                 messages.append(response.choices[0].message.model_dump())
@@ -153,7 +180,6 @@ class FactChecker:
 
             return self.formate_result(str(response.choices[0].message.content))
 
-
-
         except Exception as error:
+            raise RuntimeError(f"Fact-checking failed: {error}") from error
             raise RuntimeError(f"Fact-checking failed: {error}") from error
