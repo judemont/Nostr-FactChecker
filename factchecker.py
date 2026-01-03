@@ -24,8 +24,7 @@ class FactChecker:
         self.client = Mistral(api_key=api_key)
         self.agent_id = agent_id
         self.beta_warning_message = (
-            "Warning: This tool is still in beta and may produce inaccurate results. "
-            "Always verify information from reliable sources."
+            "Caution: I’m just a tool. I don’t hold absolute truth or authority. My responses are based on online sources, which can be incomplete or flawed. Always verify independently."
         )
 
 
@@ -152,7 +151,7 @@ class FactChecker:
             if not response.choices[0].message.content:
                 raise RuntimeError("No content returned after tool calls.")
 
-            return self.formate_result(response.choices[0].message.content)
+            return self.formate_result(str(response.choices[0].message.content))
 
 
 
