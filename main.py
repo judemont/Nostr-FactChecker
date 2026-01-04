@@ -51,7 +51,7 @@ FACTCHECKER_NPUB = "npub1gy63uvtxu7mdmhwyczk53e5n28krg5p8wx3pdklq3w5udq7ylcwqvrw
 FACTCHECKER_PUBKEY = "41351e3166e7b6ddddc4c0ad48e69351ec34502771a216dbe08ba9c683c4fe1c"
 
 RATE_LIMIT_DELAY = datetime.timedelta(milliseconds=5000)
-FETCH_EVENT_TIMEOUT = 2.0
+FETCH_EVENT_TIMEOUT = 10.0
 
 
 # ============================================================
