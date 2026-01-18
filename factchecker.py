@@ -108,11 +108,43 @@ class FactChecker:
         return f"Fact-Check Results:\n{result}\n\n{self.warning_message}"
 
 
+    def _call_api_with_retry(
+        self, messages: list[AgentsCompletionRequestMessagesTypedDict], max_retries: int = 3
+    ):
+        """Call the API with exponential backoff retry logic."""
+        import time
+        
+        for attempt in range(max_retries):
+            try:
+                response = self.client.agents.complete(
+                    messages=list(messages),
+                    agent_id=self.agent_id,
+                    stream=False,
+                )
+                # Base delay to avoid rate limiting
+                time.sleep(2.0)
+                return response
+            except Exception as error:
+                error_str = str(error)
+                # Check if it's a rate limit error
+                if "429" in error_str or "rate limit" in error_str.lower() or "capacity exceeded" in error_str.lower():
+                    if attempt < max_retries - 1:
+                        # Exponential backoff: 5s, 15s, 45s
+                        wait_time = 5 * (3 ** attempt)
+                        print(f"Rate limited. Retrying in {wait_time} seconds... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                    else:
+                        raise RuntimeError(f"Rate limit exceeded after {max_retries} attempts") from error
+                else:
+                    # Not a rate limit error, re-raise immediately
+                    raise
+        
+        raise RuntimeError("API call failed after all retry attempts")
+
     def check_fact(
         self, statement: str, image_urls: Optional[List[str]] = None
     ) -> str:
         """Main method to check a factual statement."""
-        import time
         sanitized_statement = statement.strip().replace('"', "'").replace("\n", " ")
 
         # Initialize messages with system prompt and user query
@@ -152,13 +184,8 @@ class FactChecker:
             )
 
         try:
-            # Initial API call
-            response = self.client.agents.complete(
-                messages=list(messages),
-                agent_id=self.agent_id,
-                stream=False,
-            )
-            time.sleep(1.5)
+            # Initial API call with retry logic
+            response = self._call_api_with_retry(messages)
 
             # Add the assistant's response to messages
             messages.append(cast(AssistantMessageTypedDict, response.choices[0].message.model_dump()))
@@ -168,16 +195,11 @@ class FactChecker:
                 messages = self.handle_tool_calls(
                     response.choices[0].message.tool_calls, messages
                 )
-                # Call the API again with tool results
-                response = self.client.agents.complete(
-                    messages=messages,
-                    agent_id=self.agent_id,
-                    stream=False,
-                )
-                time.sleep(1.5)
+                # Call the API again with tool results and retry logic
+                response = self._call_api_with_retry(messages)
 
                 # Add the new response to messages
-                messages.append(response.choices[0].message.model_dump())
+                messages.append(cast(AssistantMessageTypedDict, response.choices[0].message.model_dump()))
 
             # Return the final answer
             if not response.choices[0].message.content:
@@ -186,5 +208,4 @@ class FactChecker:
             return self.formate_result(str(response.choices[0].message.content))
 
         except Exception as error:
-            raise RuntimeError(f"Fact-checking failed: {error}") from error
             raise RuntimeError(f"Fact-checking failed: {error}") from error
