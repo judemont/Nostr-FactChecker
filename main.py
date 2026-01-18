@@ -143,7 +143,7 @@ def should_handle_event(event: Event) -> bool:
     mentioned_explicitly = "@factchecker" in content
     
     tagged_directly = any(
-        ptag[0] in {FACTCHECKER_NPUB, FACTCHECKER_PUBKEY} and "nostr:" in content
+        ptag[0] in {FACTCHECKER_NPUB, FACTCHECKER_PUBKEY} and "nostr:" in content and event.pubkey != FACTCHECKER_PUBKEY
         for ptag in ptags
     )
     
