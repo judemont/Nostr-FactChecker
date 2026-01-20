@@ -226,7 +226,7 @@ def on_message(message_json, relay_url):
 
             # Send reply
             reply_event.sign(str(FACTCHECKER_PRIVATE_KEY))
-            log.debug(f"Sending fact-check reply event: {reply_event.to_dict()}")
+            log.info(f"Sending fact-check reply event: {reply_event.to_dict()}")
             relay_manager.publish_event(reply_event)
             
             log.info("Fact-check reply sent")
