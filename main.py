@@ -14,10 +14,9 @@ from pynostr.filters import Filters, FiltersList
 from pynostr.message_type import RelayMessageType
 from pynostr.relay_list import RelayList
 from pynostr.relay_manager import RelayManager
-from pynostr.key import PublicKey
-from pynostr.bech32 import bech32_decode
 
 from factchecker import FactChecker
+from pynostr.key import PublicKey
 
 
 logging.basicConfig(
@@ -38,13 +37,10 @@ if FACTCHECKER_PRIVATE_KEY is None:
 if MISTRAL_API_KEY is None:
     raise ValueError("MISTRAL_API_KEY environment variable not set")
 
+
 FACTCHECKER_AGENT_ID = "ag_019b704bddcc72079c3a26f9cb4891fa"
-
+FACTCHECKER_NPUB = "npub1gy63uvtxu7mdmhwyczk53e5n28krg5p8wx3pdklq3w5udq7ylcwqvrwygj"
 FACTCHECKER_PUBKEY = "41351e3166e7b6ddddc4c0ad48e69351ec34502771a216dbe08ba9c683c4fe1c"
-
-BLACKLISTED_PUBKEYS = {
-    "0000000000000000000000000000000000000000000000000000000000000000",
-}
 
 RATE_LIMIT_DELAY = datetime.timedelta(milliseconds=5000)
 FETCH_EVENT_TIMEOUT = 10.0
@@ -63,8 +59,12 @@ RELAYS = [
 ]
 
 
+MUTED_PUBKEYS ={"d52a3260bba32caf47a9f8e09b8be31a790bc00ba9668556f7d319d74dd4206c"}
+
+
 event_dedup_cache = TTLCache(maxsize=1000, ttl=60)
 pending_event_requests: Dict[str, Queue] = {}
+
 last_sent_message_time = datetime.datetime.min
 
 factchecker = FactChecker(
@@ -79,32 +79,6 @@ def pubkey_to_npub(pubkey: str) -> str:
     return PublicKey(bytes.fromhex(pubkey)).bech32()
 
 
-def normalize_pubkey(value: str) -> Optional[str]:
-    if not value:
-        return None
-
-    v = value.lower()
-
-    if len(v) == 64 and all(c in "0123456789abcdef" for c in v):
-        return v
-
-    try:
-        hrp, data = bech32_decode(v)
-    except Exception:
-        return None
-
-    if hrp == "npub":
-        return bytes(data).hex()
-
-    if hrp == "nprofile":
-        try:
-            return bytes(data[2:34]).hex()
-        except Exception:
-            return None
-
-    return None
-
-
 def extract_image_urls(content: str) -> List[str]:
     if not content:
         return []
@@ -112,7 +86,9 @@ def extract_image_urls(content: str) -> List[str]:
     return [
         word for word in content.split()
         if word.startswith(("http://", "https://"))
-        and word.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"))
+        and word.lower().endswith((
+            ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"
+        ))
     ]
 
 
@@ -123,6 +99,7 @@ def fetch_event_by_id(event_id: str, timeout: float = FETCH_EVENT_TIMEOUT):
 
     subscription_id = uuid.uuid4().hex
     filters = FiltersList([Filters(ids=[event_id])])
+
     relay_manager.add_subscription_on_all_relays(subscription_id, filters)
 
     try:
@@ -131,25 +108,29 @@ def fetch_event_by_id(event_id: str, timeout: float = FETCH_EVENT_TIMEOUT):
             queue.get()
         )
         return event
-    except Exception:
+    except TimeoutError:
         return None
     finally:
         pending_event_requests.pop(event_id, None)
 
 
 def should_handle_event(event: Event) -> bool:
-    if event.pubkey == FACTCHECKER_PUBKEY:
+    if event.pubkey in MUTED_PUBKEYS:
         return False
 
-    if event.pubkey in BLACKLISTED_PUBKEYS:
-        return False
+    content = (event.content or "").lower()
+    ptags = event.get_tag_list("p")
 
-    for tag in event.tags or []:
-        if len(tag) >= 2 and tag[0] == "p":
-            if normalize_pubkey(tag[1]) == FACTCHECKER_PUBKEY:
-                return True
+    mentioned_explicitly = "@factchecker" in content
 
-    return False
+    tagged_directly = any(
+        ptag[0] in {FACTCHECKER_NPUB, FACTCHECKER_PUBKEY}
+        and "nostr:" in content
+        and event.pubkey != FACTCHECKER_PUBKEY
+        for ptag in ptags
+    )
+
+    return mentioned_explicitly or tagged_directly
 
 
 @gen.coroutine
@@ -159,10 +140,7 @@ def on_message(message_json, relay_url):
     if message_json[0] != RelayMessageType.EVENT:
         return
 
-    try:
-        event = Event.from_dict(message_json[2])
-    except Exception:
-        return
+    event = Event.from_dict(message_json[2])
 
     if event.id in pending_event_requests:
         pending_event_requests[event.id].put(event)
@@ -175,41 +153,41 @@ def on_message(message_json, relay_url):
     if not should_handle_event(event):
         return
 
-    now = datetime.datetime.now()
-    if now - last_sent_message_time < RATE_LIMIT_DELAY:
-        yield gen.sleep((RATE_LIMIT_DELAY - (now - last_sent_message_time)).total_seconds())
+    while datetime.datetime.now() - last_sent_message_time < RATE_LIMIT_DELAY:
+        yield gen.sleep(0.1)
 
     last_sent_message_time = datetime.datetime.now()
 
     etags = event.get_tag_list("e")
-    reply_to_ids = [t[0] for t in etags if len(t) >= 4 and t[3] == "reply"]
+    reply_to_ids = [e[0] for e in etags if len(e) >= 3 and e[2] == "reply"]
     if not reply_to_ids:
-        reply_to_ids = [t[0] for t in etags if len(t) >= 4 and t[3] == "root"]
+        reply_to_ids = [e[0] for e in etags if len(e) >= 3 and e[2] == "root"]
 
     if not reply_to_ids:
         return
 
     target_event = yield fetch_event_by_id(reply_to_ids[0])
-    if not target_event or not target_event.content:
+    if not target_event:
         return
 
-    claim_text = target_event.content
+    claim_text = target_event.content or ""
     image_urls = extract_image_urls(claim_text)
     for url in image_urls:
         claim_text = claim_text.replace(url, "")
 
-    try:
-        result = factchecker.check_fact(claim_text, image_urls=image_urls)
-    except Exception:
-        return
+    result = factchecker.check_fact(
+        claim_text,
+        image_urls=image_urls
+    )
 
-    reply_npub = pubkey_to_npub(event.pubkey)
-    reply_event = Event(f"{result}\n\nnostr:{reply_npub}")
+    tagger_npub = pubkey_to_npub(event.pubkey)
+
+    reply_event = Event(f"{result}\n\n\nnostr:{tagger_npub}")
     reply_event.tags.append(["e", target_event.id, "", "reply"])
-    reply_event.tags.append(["p", event.pubkey])
-    reply_event.tags.append(["p", target_event.pubkey])
+    reply_event.tags.append(["p", event.pubkey, "mention"])
+    reply_event.tags.append(["p", target_event.pubkey, "mention"])
 
-    reply_event.sign(FACTCHECKER_PRIVATE_KEY)
+    reply_event.sign(str(FACTCHECKER_PRIVATE_KEY))
     relay_manager.publish_event(reply_event)
 
 
@@ -236,7 +214,9 @@ def start():
         )
     ])
 
-    relay_manager.add_subscription_on_all_relays(uuid.uuid4().hex, filters)
+    subscription_id = uuid.uuid4().hex
+    relay_manager.add_subscription_on_all_relays(subscription_id, filters)
+
     relay_manager.run_sync()
 
 
