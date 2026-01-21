@@ -76,8 +76,7 @@ RELAYS = [
 # ============================================================
 
 MUTED_PUBKEYS = {
-    "hexpubkey1",
-    "hexpubkey2",
+    "d52a3260bba32caf47a9f8e09b8be31a790bc00ba9668556f7d319d74dd4206c"
 }
 
 
