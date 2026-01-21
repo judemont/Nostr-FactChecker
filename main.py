@@ -16,9 +16,13 @@ from pynostr.relay_list import RelayList
 from pynostr.relay_manager import RelayManager
 
 from factchecker import FactChecker
-from pynostr.key import PublicKey
+from pynostr.key import PublicKey 
+from pynostr.bech32 import bech32_encode
 
 
+# ============================================================
+# LOGGING CONFIGURATION
+# ============================================================
 logging.basicConfig(
     level=logging.DEBUG,
     stream=sys.stdout,
@@ -27,6 +31,10 @@ logging.basicConfig(
 log = logging.getLogger("NostrFactCheckerBot")
 log.setLevel(logging.INFO)
 
+
+# ============================================================
+# ENVIRONMENT & CONSTANTS
+# ============================================================
 
 FACTCHECKER_PRIVATE_KEY = os.environ.get("FACTCHECKER_PRIVATE_KEY")
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY")
@@ -37,14 +45,18 @@ if FACTCHECKER_PRIVATE_KEY is None:
 if MISTRAL_API_KEY is None:
     raise ValueError("MISTRAL_API_KEY environment variable not set")
 
-
 FACTCHECKER_AGENT_ID = "ag_019b704bddcc72079c3a26f9cb4891fa"
+
 FACTCHECKER_NPUB = "npub1gy63uvtxu7mdmhwyczk53e5n28krg5p8wx3pdklq3w5udq7ylcwqvrwygj"
 FACTCHECKER_PUBKEY = "41351e3166e7b6ddddc4c0ad48e69351ec34502771a216dbe08ba9c683c4fe1c"
 
 RATE_LIMIT_DELAY = datetime.timedelta(milliseconds=5000)
 FETCH_EVENT_TIMEOUT = 10.0
 
+
+# ============================================================
+# RELAYS
+# ============================================================
 
 RELAYS = [
     "wss://nos.lol",
@@ -59,8 +71,19 @@ RELAYS = [
 ]
 
 
-MUTED_PUBKEYS ={"d52a3260bba32caf47a9f8e09b8be31a790bc00ba9668556f7d319d74dd4206c"}
+# ============================================================
+# MUTED USERS
+# ============================================================
 
+MUTED_PUBKEYS = {
+    "hexpubkey1",
+    "hexpubkey2",
+}
+
+
+# ============================================================
+# GLOBAL STATE
+# ============================================================
 
 event_dedup_cache = TTLCache(maxsize=1000, ttl=60)
 pending_event_requests: Dict[str, Queue] = {}
@@ -75,9 +98,12 @@ factchecker = FactChecker(
 relay_manager: RelayManager
 
 
+# ============================================================
+# HELPERS
+# ============================================================
+
 def pubkey_to_npub(pubkey: str) -> str:
     return PublicKey(bytes.fromhex(pubkey)).bech32()
-
 
 def extract_image_urls(content: str) -> List[str]:
     if not content:
@@ -109,6 +135,7 @@ def fetch_event_by_id(event_id: str, timeout: float = FETCH_EVENT_TIMEOUT):
         )
         return event
     except TimeoutError:
+        log.warning(f"Timeout while fetching event {event_id}")
         return None
     finally:
         pending_event_requests.pop(event_id, None)
@@ -116,13 +143,14 @@ def fetch_event_by_id(event_id: str, timeout: float = FETCH_EVENT_TIMEOUT):
 
 def should_handle_event(event: Event) -> bool:
     if event.pubkey in MUTED_PUBKEYS:
+        log.info(f"Ignoring event from muted pubkey {event.pubkey}")
         return False
 
     content = (event.content or "").lower()
     ptags = event.get_tag_list("p")
 
     mentioned_explicitly = "@factchecker" in content
-
+    
     tagged_directly = any(
         ptag[0] in {FACTCHECKER_NPUB, FACTCHECKER_PUBKEY}
         and "nostr:" in content
@@ -132,6 +160,10 @@ def should_handle_event(event: Event) -> bool:
 
     return mentioned_explicitly or tagged_directly
 
+
+# ============================================================
+# CORE MESSAGE HANDLER
+# ============================================================
 
 @gen.coroutine
 def on_message(message_json, relay_url):
@@ -153,51 +185,75 @@ def on_message(message_json, relay_url):
     if not should_handle_event(event):
         return
 
+    log.info(f"Fact-check request from {event.pubkey}")
+
     while datetime.datetime.now() - last_sent_message_time < RATE_LIMIT_DELAY:
         yield gen.sleep(0.1)
 
     last_sent_message_time = datetime.datetime.now()
 
+    reply_event: Optional[Event] = None
     etags = event.get_tag_list("e")
-    reply_to_ids = [e[0] for e in etags if len(e) >= 3 and e[2] == "reply"]
-    if not reply_to_ids:
-        reply_to_ids = [e[0] for e in etags if len(e) >= 3 and e[2] == "root"]
+   
+    reply_to_ids = [etag[0] for etag in etags if len(etag) >= 3 and etag[2] == "reply"]
+    if len(reply_to_ids) == 0:
+        reply_to_ids = [etag[0] for etag in etags if len(etag) >= 3 and etag[2] == "root"]
 
-    if not reply_to_ids:
+    is_reply = len(reply_to_ids) > 0
+    reply_to_id = reply_to_ids[0] if is_reply else None
+   
+    try:
+        if is_reply:
+            target_event_id = reply_to_id
+            target_event = yield fetch_event_by_id(target_event_id)
+            print(target_event)
+            if not target_event:
+                return
+
+            claim_text = target_event.content or ""
+            image_urls = extract_image_urls(claim_text)
+            for image_url in image_urls:
+                claim_text = claim_text.replace(image_url, "")
+
+            factcheck_result = factchecker.check_fact(
+                claim_text,
+                image_urls=image_urls
+            )
+
+            tagger_npub = pubkey_to_npub(event.pubkey or "")
+            reply_event = Event(f"{factcheck_result}\n\n\nnostr:{tagger_npub}")
+            reply_event.tags.append(["e", str(target_event_id), "", "reply"])
+            reply_event.tags.append(["p", str(event.pubkey), "mention"])
+            reply_event.tags.append(["p", str(target_event.pubkey), "mention"])
+
+            reply_event.sign(str(FACTCHECKER_PRIVATE_KEY))
+            log.info(f"Sending fact-check reply event: {reply_event.to_dict()}")
+            relay_manager.publish_event(reply_event)
+            
+            log.info("Fact-check reply sent")
+        else:
+            log.info("No reply_to event found, skipping fact-checking.")
+
+    except Exception as exc:
+        log.error(f"Fact-checking failed: {exc}")
         return
 
-    target_event = yield fetch_event_by_id(reply_to_ids[0])
-    if not target_event:
-        return
 
-    claim_text = target_event.content or ""
-    image_urls = extract_image_urls(claim_text)
-    for url in image_urls:
-        claim_text = claim_text.replace(url, "")
-
-    result = factchecker.check_fact(
-        claim_text,
-        image_urls=image_urls
-    )
-
-    tagger_npub = pubkey_to_npub(event.pubkey)
-
-    reply_event = Event(f"{result}\n\n\nnostr:{tagger_npub}")
-    reply_event.tags.append(["e", target_event.id, "", "reply"])
-    reply_event.tags.append(["p", event.pubkey, "mention"])
-    reply_event.tags.append(["p", target_event.pubkey, "mention"])
-
-    reply_event.sign(str(FACTCHECKER_PRIVATE_KEY))
-    relay_manager.publish_event(reply_event)
-
+# ============================================================
+# STARTUP
+# ============================================================
 
 def start():
     global relay_manager
+
+    log.info("Connecting to relays...")
 
     relay_list = RelayList()
     relay_list.append_url_list(RELAYS)
     relay_list.update_relay_information(timeout=1)
     relay_list.drop_empty_metadata()
+
+    log.info(f"Connected to {len(relay_list.data)} relays")
 
     relay_manager = RelayManager(error_threshold=3, timeout=0)
     relay_manager.add_relay_list(
