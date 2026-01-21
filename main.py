@@ -15,7 +15,7 @@ from pynostr.message_type import RelayMessageType
 from pynostr.relay_list import RelayList
 from pynostr.relay_manager import RelayManager
 from pynostr.key import PublicKey
-from pynostr.nip19 import decode as nip19_decode
+from pynostr.bech32 import bech32_decode
 
 from factchecker import FactChecker
 
@@ -90,15 +90,18 @@ def normalize_pubkey(value: str) -> Optional[str]:
         return v
 
     try:
-        decoded = nip19_decode(v)
+        hrp, data = bech32_decode(v)
     except Exception:
         return None
 
-    if decoded["type"] == "npub":
-        return decoded["data"].hex()
+    if hrp == "npub":
+        return bytes(data).hex()
 
-    if decoded["type"] == "nprofile":
-        return decoded["data"]["pubkey"].hex()
+    if hrp == "nprofile":
+        try:
+            return bytes(data[2:34]).hex()
+        except Exception:
+            return None
 
     return None
 
