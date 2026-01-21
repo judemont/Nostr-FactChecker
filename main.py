@@ -68,6 +68,8 @@ RELAYS = [
     "wss://relay.nostr.jabber.ch",
     "wss://relay.pleb.to",
     "wss://relay.primal.net",
+    "wss://relay.nostr.band",
+    "wss://relay.nostr.pub"
 ]
 
 
@@ -205,7 +207,7 @@ def on_message(message_json, relay_url):
         if is_reply:
             target_event_id = reply_to_id
             target_event = yield fetch_event_by_id(target_event_id)
-            print(target_event)
+          #  print(target_event)
             if not target_event:
                 return
 
