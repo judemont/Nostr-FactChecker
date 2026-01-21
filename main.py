@@ -40,7 +40,6 @@ if MISTRAL_API_KEY is None:
 
 FACTCHECKER_AGENT_ID = "ag_019b704bddcc72079c3a26f9cb4891fa"
 
-FACTCHECKER_NPUB = "npub1gy63uvtxu7mdmhwyczk53e5n28krg5p8wx3pdklq3w5udq7ylcwqvrwygj"
 FACTCHECKER_PUBKEY = "41351e3166e7b6ddddc4c0ad48e69351ec34502771a216dbe08ba9c683c4fe1c"
 
 BLACKLISTED_PUBKEYS = {
@@ -139,24 +138,16 @@ def fetch_event_by_id(event_id: str, timeout: float = FETCH_EVENT_TIMEOUT):
 
 
 def should_handle_event(event: Event) -> bool:
-    if not event.content:
-        return False
-
     if event.pubkey == FACTCHECKER_PUBKEY:
         return False
 
     if event.pubkey in BLACKLISTED_PUBKEYS:
         return False
 
-    content = event.content.lower()
-
-    if "@factchecker" in content:
-        return True
-
-    for tag in event.get_tag_list("p"):
-        normalized = normalize_pubkey(tag[0])
-        if normalized == FACTCHECKER_PUBKEY:
-            return True
+    for tag in event.tags or []:
+        if len(tag) >= 2 and tag[0] == "p":
+            if normalize_pubkey(tag[1]) == FACTCHECKER_PUBKEY:
+                return True
 
     return False
 
