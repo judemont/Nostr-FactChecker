@@ -69,7 +69,9 @@ RELAYS = [
     "wss://relay.pleb.to",
     "wss://relay.primal.net",
     "wss://relay.nostr.band",
-    "wss://relay.nostr.pub"
+    "wss://relay.nostr.pub",
+    "wss://nostr.rocks",
+    "wss://relay.snort.social"
 ]
 
 
