@@ -230,9 +230,8 @@ def on_message(message_json, relay_url):
             reply_event.tags.append(["p", str(target_event.pubkey), "mention"])
 
             reply_event.sign(str(FACTCHECKER_PRIVATE_KEY))
-            log.info(f"Sending fact-check reply event: {reply_event.to_dict()}")
             relay_manager.publish_event(reply_event)
-            
+            log.info(f"Sending fact-check reply event: {reply_event.to_dict()}")
             log.info("Fact-check reply sent")
         else:
             log.info("No reply_to event found, skipping fact-checking.")
