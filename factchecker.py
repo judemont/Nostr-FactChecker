@@ -28,6 +28,7 @@ class FactChecker:
         self.warning_message = (
             "Caution: I’m just a tool. I don’t hold absolute truth or authority. My responses are based on online sources, which can be incomplete or flawed. Always verify independently."
         )
+        self.max_images = 7
 
     def get_webpage_content(self, url: str, max_length: int = 10000) -> str:
         """Fetch and return the text content of a webpage."""
@@ -178,7 +179,7 @@ class FactChecker:
                     role="user",
                     content=[
                             ImageURLChunkTypedDict(image_url=url, type="image_url") 
-                        for url in image_urls
+                        for url in image_urls[:self.max_images]
                         ]
                     )
             )
