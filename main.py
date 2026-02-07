@@ -24,12 +24,17 @@ from pynostr.bech32 import bech32_encode
 # LOGGING CONFIGURATION
 # ============================================================
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.WARNING,
     stream=sys.stdout,
     format="[%(asctime)s - %(levelname)s] %(message)s"
 )
 log = logging.getLogger("NostrFactCheckerBot")
 log.setLevel(logging.INFO)
+
+
+def short_id(hex_id: Optional[str], length: int = 8) -> str:
+    """Truncate a hex ID for readable logs."""
+    return hex_id[:length] if hex_id else "???"
 
 
 # ============================================================
@@ -53,6 +58,12 @@ FACTCHECKER_PUBKEY = "41351e3166e7b6ddddc4c0ad48e69351ec34502771a216dbe08ba9c683
 RATE_LIMIT_DELAY = datetime.timedelta(milliseconds=5000)
 FETCH_EVENT_TIMEOUT = 10.0
 
+PUBLISH_VERIFY_TIMEOUT = 5.0
+PUBLISH_MAX_RETRIES = 3
+PUBLISH_INITIAL_BACKOFF = 2.0
+
+RELAY_RECONNECT_INTERVAL = 30 * 60  # Reconnect to relays every 30 minutes
+
 
 # ============================================================
 # RELAYS
@@ -60,12 +71,8 @@ FETCH_EVENT_TIMEOUT = 10.0
 
 RELAYS = [
     "wss://nos.lol",
-    "wss://relay.nostr.bg",
-    "wss://nostr.einundzwanzig.space",
     "wss://relay.damus.io",
-    "wss://nostr.mom/",
-    "wss://nostr-pub.wellorder.net/",
-    "wss://relay.nostr.jabber.ch",
+    "wss://nostr.mom",
     "wss://relay.pleb.to",
     "wss://relay.primal.net",
     "wss://relay.nostr.band",
@@ -138,15 +145,44 @@ def fetch_event_by_id(event_id: str, timeout: float = FETCH_EVENT_TIMEOUT):
         )
         return event
     except TimeoutError:
-        log.warning(f"Timeout while fetching event {event_id}")
+        log.warning(f"Timeout fetching event {short_id(event_id)} after {timeout}s")
         return None
     finally:
         pending_event_requests.pop(event_id, None)
 
 
+@gen.coroutine
+def publish_and_verify(event: Event, max_retries: int = PUBLISH_MAX_RETRIES):
+    """Publish an event and verify it was received by at least one relay.
+    Retries with exponential backoff if the event is not found."""
+    backoff = PUBLISH_INITIAL_BACKOFF
+
+    for attempt in range(1, max_retries + 1):
+        log.info(f"  Publish attempt {attempt}/{max_retries} for {short_id(event.id)} (wait {backoff:.0f}s)")
+        relay_manager.publish_event(event)
+
+        # Give relays time to process before verifying
+        yield gen.sleep(backoff)
+
+        # Try to fetch the event back to confirm it landed
+        verified_event = yield fetch_event_by_id(
+            event.id, timeout=PUBLISH_VERIFY_TIMEOUT
+        )
+
+        if verified_event is not None:
+            log.info(f"  Event {short_id(event.id)} verified (attempt {attempt}/{max_retries})")
+            return True
+
+        log.warning(f"  Event {short_id(event.id)} not found, will retry...")
+        backoff = min(backoff * 2, 30.0)  # exponential backoff, cap at 30s
+
+    log.error(f"  DELIVERY FAILED: {short_id(event.id)} not verified after {max_retries} attempts")
+    return False
+
+
 def should_handle_event(event: Event) -> bool:
     if event.pubkey in MUTED_PUBKEYS:
-        log.info(f"Ignoring event from muted pubkey {event.pubkey}")
+        log.debug(f"Muted user {short_id(event.pubkey)}, skipping")
         return False
 
     content = (event.content or "").lower()
@@ -172,6 +208,17 @@ def should_handle_event(event: Event) -> bool:
 def on_message(message_json, relay_url):
     global last_sent_message_time
 
+    if message_json[0] == RelayMessageType.OK:
+        event_id = message_json[1]
+        accepted = message_json[2]
+        reason = message_json[3] if len(message_json) > 3 else ""
+        relay_name = relay_url.replace("wss://", "").rstrip("/")
+        if accepted:
+            log.info(f"  [OK] {relay_name} accepted {short_id(event_id)}")
+        else:
+            log.warning(f"  [REJECTED] {relay_name} rejected {short_id(event_id)}: {reason}")
+        return
+
     if message_json[0] != RelayMessageType.EVENT:
         return
 
@@ -188,7 +235,8 @@ def on_message(message_json, relay_url):
     if not should_handle_event(event):
         return
 
-    log.info(f"Fact-check request from {event.pubkey}")
+    requester_npub = pubkey_to_npub(event.pubkey or "")
+    log.info(f"--- Fact-check request from {requester_npub} (event {short_id(event.id)})")
 
     while datetime.datetime.now() - last_sent_message_time < RATE_LIMIT_DELAY:
         yield gen.sleep(0.1)
@@ -208,20 +256,37 @@ def on_message(message_json, relay_url):
     try:
         if is_reply:
             target_event_id = reply_to_id
+            log.info(f"  Fetching target event {short_id(target_event_id)}...")
             target_event = yield fetch_event_by_id(target_event_id)
-          #  print(target_event)
             if not target_event:
+                log.warning(f"  Target event {short_id(target_event_id)} not found, aborting")
                 return
 
+            if target_event.pubkey == FACTCHECKER_PUBKEY:
+                log.info(f"  Target {short_id(target_event_id)} is our own event, skipping")
+                return
+
+            target_npub = pubkey_to_npub(target_event.pubkey or "")
             claim_text = target_event.content or ""
             image_urls = extract_image_urls(claim_text)
             for image_url in image_urls:
                 claim_text = claim_text.replace(image_url, "")
 
+            claim_preview = claim_text.strip()[:120].replace("\n", " ")
+            log.info(
+                f"  Claim by {target_npub}: \"{claim_preview}{'...' if len(claim_text.strip()) > 120 else ''}\""
+            )
+            if image_urls:
+                log.info(f"  Images attached: {len(image_urls)}")
+
+            log.info("  Running fact-check via Mistral...")
+            fc_start = datetime.datetime.now()
             factcheck_result = factchecker.check_fact(
                 claim_text,
                 image_urls=image_urls
             )
+            fc_duration = (datetime.datetime.now() - fc_start).total_seconds()
+            log.info(f"  Fact-check completed in {fc_duration:.1f}s")
 
             tagger_npub = pubkey_to_npub(event.pubkey or "")
             reply_event = Event(f"{factcheck_result}\n\n\nnostr:{tagger_npub}")
@@ -230,14 +295,18 @@ def on_message(message_json, relay_url):
             reply_event.tags.append(["p", str(target_event.pubkey), "mention"])
 
             reply_event.sign(str(FACTCHECKER_PRIVATE_KEY))
-            relay_manager.publish_event(reply_event)
-            log.info(f"Sending fact-check reply event: {reply_event.to_dict()}")
-            log.info("Fact-check reply sent")
+            log.info(f"  Publishing reply {short_id(reply_event.id)}...")
+
+            delivered = yield publish_and_verify(reply_event)
+            if delivered:
+                log.info(f"  Reply {short_id(reply_event.id)} confirmed on relay")
+            else:
+                log.error(f"  Reply {short_id(reply_event.id)} could NOT be confirmed on any relay")
         else:
-            log.info("No reply_to event found, skipping fact-checking.")
+            log.info("  No target event in tags, skipping")
 
     except Exception as exc:
-        log.error(f"Fact-checking failed: {exc}")
+        log.error(f"  Fact-check failed: {exc}", exc_info=True)
         return
 
 
@@ -245,20 +314,18 @@ def on_message(message_json, relay_url):
 # STARTUP
 # ============================================================
 
-def start():
-    global relay_manager
-
-    log.info("Connecting to relays...")
-
+def connect_relays() -> RelayManager:
+    """Create a fresh RelayManager with active connections."""
     relay_list = RelayList()
     relay_list.append_url_list(RELAYS)
     relay_list.update_relay_information(timeout=1)
     relay_list.drop_empty_metadata()
 
-    log.info(f"Connected to {len(relay_list.data)} relays")
+    connected_relays = [r.url for r in relay_list.data]
+    log.info(f"Connected to {len(connected_relays)} relays: {', '.join(r.replace('wss://', '') for r in connected_relays)}")
 
-    relay_manager = RelayManager(error_threshold=3, timeout=0)
-    relay_manager.add_relay_list(
+    manager = RelayManager(error_threshold=3, timeout=0)
+    manager.add_relay_list(
         relay_list,
         close_on_eose=False,
         message_callback=on_message,
@@ -273,9 +340,41 @@ def start():
     ])
 
     subscription_id = uuid.uuid4().hex
-    relay_manager.add_subscription_on_all_relays(subscription_id, filters)
+    manager.add_subscription_on_all_relays(subscription_id, filters)
 
-    relay_manager.run_sync()
+    return manager
+
+
+def start():
+    global relay_manager
+
+    while True:
+        log.info("Connecting to relays...")
+
+        try:
+            relay_manager = connect_relays()
+        except Exception as e:
+            log.error(f"Failed to connect to relays: {e}")
+            log.info("Retrying in 30s...")
+            import time
+            time.sleep(30)
+            continue
+
+        # Schedule a disconnect after the reconnect interval
+        # This causes run_sync() to return so we can rebuild connections
+        relay_manager.io_loop.call_later(
+            RELAY_RECONNECT_INTERVAL,
+            relay_manager.close_all_relay_connections
+        )
+
+        log.info("Bot is now listening for mentions...")
+
+        try:
+            relay_manager.run_sync()
+        except Exception as e:
+            log.warning(f"Relay connection interrupted: {e}")
+
+        log.info(f"Reconnecting to relays (periodic refresh every {RELAY_RECONNECT_INTERVAL // 60}min)...")
 
 
 if __name__ == "__main__":
